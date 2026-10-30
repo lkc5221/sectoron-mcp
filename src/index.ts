@@ -211,7 +211,7 @@ function createServer() {
 
 				const matches = articles
 					.filter((article) => {
-						const text = `${article.title} ${article.summary}`.toUpperCase();
+						const text = `${article.title} ${article.summary} ${article.url}`.toUpperCase();
 
 						const escaped = keyword.replace(
 							/[.*+?^${}()|[\]\\]/g,
