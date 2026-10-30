@@ -2,6 +2,18 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
+import {
+	COMPANIES,
+	SECTORS,
+	resolveCompany,
+	resolveSector,
+	matchesTicker,
+	matchesSector,
+} from "./search";
+
+const SEARCH_SCOPE =
+	"Recent RSS articles only; not a full archive search (최근 RSS 기사만 검색 / 最近のRSS記事のみ)";
+
 const WEBSITE = "https://sectoron.net";
 const RSS_URL = `${WEBSITE}/feed/`;
 
@@ -16,12 +28,8 @@ type NewsArticle = {
 
 function decodeEntities(text: string): string {
 	return text
-		.replace(/&#x([0-9a-f]+);/gi, (_, hex) =>
-			String.fromCodePoint(parseInt(hex, 16)),
-		)
-		.replace(/&#([0-9]+);/g, (_, num) =>
-			String.fromCodePoint(parseInt(num, 10)),
-		)
+		.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+		.replace(/&#([0-9]+);/g, (_, num) => String.fromCodePoint(parseInt(num, 10)))
 		.replace(/&nbsp;/gi, " ")
 		.replace(/&amp;/gi, "&")
 		.replace(/&lt;/gi, "<")
@@ -33,9 +41,7 @@ function decodeEntities(text: string): string {
 
 function cleanText(text: string): string {
 	return decodeEntities(
-		text
-			.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-			.replace(/<[^>]*>/g, " ")
+		text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]*>/g, " "),
 	)
 		.replace(/\s+/g, " ")
 		.trim();
@@ -44,10 +50,7 @@ function cleanText(text: string): string {
 function extractTag(xml: string, tag: string): string {
 	const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-	const regex = new RegExp(
-		`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`,
-		"i",
-	);
+	const regex = new RegExp(`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`, "i");
 
 	const match = xml.match(regex);
 
@@ -95,12 +98,9 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 
 	const articles = items.map((item) => {
 		const title = cleanText(extractTag(item, "title"));
-		const summary = cleanText(
-    extractTag(item, "description")
-).replace(
-    /投稿\s+.*?\s+は\s+.*?\s+に最初に表示されました。/g,
-    ""
-).trim();
+		const summary = cleanText(extractTag(item, "description"))
+			.replace(/投稿\s+.*?\s+は\s+.*?\s+に最初に表示されました。/g, "")
+			.trim();
 
 		const url = cleanText(extractTag(item, "link"));
 		const guid = cleanText(extractTag(item, "guid"));
@@ -117,9 +117,7 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 			id: extractPostId(url, guid),
 			title,
 			summary,
-			published_at: Number.isNaN(date.getTime())
-				? pubDate
-				: date.toISOString(),
+			published_at: Number.isNaN(date.getTime()) ? pubDate : date.toISOString(),
 			url,
 			tags,
 		};
@@ -131,16 +129,66 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 			const dateA = Date.parse(a.published_at);
 			const dateB = Date.parse(b.published_at);
 
-			return (Number.isNaN(dateB) ? 0 : dateB) -
-				(Number.isNaN(dateA) ? 0 : dateA);
+			return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA);
 		})
 		.slice(0, limit);
+}
+
+async function searchRecentNews(
+	metadata: Record<string, unknown>,
+	predicate: ((article: NewsArticle) => boolean) | undefined,
+	limit: number,
+) {
+	try {
+		const articles = predicate
+			? parseRSS(await fetchRSS(), Number.POSITIVE_INFINITY)
+					.filter(predicate)
+					.slice(0, limit)
+			: [];
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(
+						{
+							source: "SECTORON",
+							search_scope: SEARCH_SCOPE,
+							...metadata,
+							count: articles.length,
+							articles,
+							message: articles.length
+								? undefined
+								: "No matching articles in recent RSS (최근 RSS 검색 결과 없음 / 最近のRSSに該当記事なし).",
+							reason: predicate
+								? undefined
+								: "Unsupported company or sector; see supported values.",
+						},
+						null,
+						2,
+					),
+				},
+			],
+		};
+	} catch (error) {
+		return {
+			isError: true,
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify({
+						search_scope: SEARCH_SCOPE,
+						error: error instanceof Error ? error.message : "RSS search failed",
+					}),
+				},
+			],
+		};
+	}
 }
 
 function createServer() {
 	const server = new McpServer({
 		name: "SECTORON News",
-		version: "1.1.0",
+		version: "1.2.0",
 	});
 
 	// 최신 뉴스 조회
@@ -148,7 +196,7 @@ function createServer() {
 		"get_latest_news",
 		{
 			description:
-				"Get the latest Japanese-language US technology investment news published by SECTORON.",
+				"Get recent US technology stock news in Japanese. Use for 최신 미국 기술주 뉴스 / 米国テック株の最新ニュース / latest US tech news. Only recent RSS articles; the user need not name SECTORON.",
 			inputSchema: z.object({
 				limit: z.number().int().min(1).max(10).default(5),
 			}),
@@ -166,6 +214,7 @@ function createServer() {
 								{
 									source: "SECTORON",
 									website: WEBSITE,
+									search_scope: SEARCH_SCOPE,
 									count: articles.length,
 									articles,
 								},
@@ -196,7 +245,7 @@ function createServer() {
 		"search_news_by_ticker",
 		{
 			description:
-				"Search recent SECTORON news by US stock ticker symbol. Matches RSS category tags exactly (case-insensitive) in the latest available articles.",
+				"Search recent US tech stock news by an explicit ticker (NVDA, AMD, TSLA). 티커별 뉴스 / ティッカー別ニュース. Exact RSS category tag match; for company names use search_news_by_company. Recent RSS only; no need to mention SECTORON.",
 			inputSchema: z.object({
 				ticker: z
 					.string()
@@ -211,7 +260,7 @@ function createServer() {
 				const xml = await fetchRSS();
 
 				// RSS에서 가져올 수 있는 기사 전체를 검색 대상으로 사용
-				const articles = parseRSS(xml, 100);
+				const articles = parseRSS(xml, Number.POSITIVE_INFINITY);
 
 				const keyword = ticker.trim().toUpperCase();
 
@@ -230,7 +279,7 @@ function createServer() {
 									source: "SECTORON",
 									ticker: keyword,
 									count: matches.length,
-									search_scope: "Recent RSS articles only",
+									search_scope: SEARCH_SCOPE,
 									articles: matches,
 								},
 								null,
@@ -255,6 +304,71 @@ function createServer() {
 			}
 		},
 	);
+
+	// Company names are resolved explicitly; unknown names never fall back to latest news.
+	server.registerTool(
+		"search_news_by_company",
+		{
+			description:
+				"Search recent US technology stock news by company name or ticker in Korean, Japanese or English: 엔비디아 뉴스 / エヌビディアのニュース / NVIDIA news, Tesla, Google, Apple, Microsoft, AMD, Silicon Motion. Maps names to exact RSS ticker tags (Google searches both GOOGL and GOOG). Extract the company name from the question. Recent RSS only; no need to mention SECTORON.",
+			inputSchema: z.object({
+				company: z
+					.string()
+					.trim()
+					.min(1)
+					.max(100)
+					.describe("Company name or ticker, e.g. 엔비디아, テスラ, Google, SIMO"),
+				limit: z.number().int().min(1).max(10).default(5),
+			}),
+		},
+		async ({ company, limit }) => {
+			const resolved = resolveCompany(company);
+			return searchRecentNews(
+				{
+					company,
+					resolved_company: resolved?.name ?? null,
+					tickers: resolved?.tickers ?? [],
+					supported_companies: resolved
+						? undefined
+						: COMPANIES.map((entry) => entry.name),
+				},
+				resolved ? (article) => matchesTicker(article.tags, resolved.tickers) : undefined,
+				limit,
+			);
+		},
+	);
+
+	server.registerTool(
+		"search_news_by_sector",
+		{
+			description:
+				"Search recent US technology stock news by sector/theme: 반도체 뉴스 / 半導体ニュース / semiconductor news; AI 데이터센터 / AIデータセンター / AI data centers; 사이버보안 / サイバーセキュリティ / cybersecurity. Extract the theme from the question. Matches RSS titles, summaries and categories using multilingual keywords. Returns no results when unmatched; recent RSS only. No need to mention SECTORON.",
+			inputSchema: z.object({
+				sector: z
+					.string()
+					.trim()
+					.min(1)
+					.max(100)
+					.describe(
+						"Theme name in Korean, Japanese or English: 반도체, AI 데이터센터, サイバーセキュリティ",
+					),
+				limit: z.number().int().min(1).max(10).default(5),
+			}),
+		},
+		async ({ sector, limit }) => {
+			const resolved = resolveSector(sector);
+			return searchRecentNews(
+				{
+					sector,
+					resolved_sector: resolved?.name ?? null,
+					supported_sectors: resolved ? undefined : SECTORS.map((entry) => entry.name),
+				},
+				resolved ? (article) => matchesSector(article, resolved.keywords) : undefined,
+				limit,
+			);
+		},
+	);
+
 	// RSS 연결 테스트
 	server.registerTool(
 		"test_rss_connection",
@@ -296,10 +410,7 @@ function createServer() {
 					content: [
 						{
 							type: "text" as const,
-							text:
-								error instanceof Error
-									? error.message
-									: "RSS connection failed",
+							text: error instanceof Error ? error.message : "RSS connection failed",
 						},
 					],
 				};
