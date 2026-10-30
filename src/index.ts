@@ -185,7 +185,82 @@ function createServer() {
 			}
 		},
 	);
+	// 티커별 뉴스 검색
+	server.registerTool(
+		"search_news_by_ticker",
+		{
+			description:
+				"Search recent SECTORON news by US stock ticker symbol. Searches the latest articles available in the RSS feed.",
+			inputSchema: z.object({
+				ticker: z
+					.string()
+					.min(1)
+					.max(10)
+					.describe("US stock ticker symbol, such as NVDA, AMD, or SIMO"),
+				limit: z.number().int().min(1).max(10).default(5),
+			}),
+		},
+		async ({ ticker, limit }) => {
+			try {
+				const xml = await fetchRSS();
 
+				// RSS에서 가져올 수 있는 기사 전체를 검색 대상으로 사용
+				const articles = parseRSS(xml, 100);
+
+				const keyword = ticker.trim().toUpperCase();
+
+				const matches = articles
+					.filter((article) => {
+						const text = `${article.title} ${article.summary}`.toUpperCase();
+
+						const escaped = keyword.replace(
+							/[.*+?^${}()|[\]\\]/g,
+							"\\$&",
+						);
+
+						const pattern = new RegExp(
+							`(^|[^A-Z0-9])${escaped}($|[^A-Z0-9])`,
+							"i",
+						);
+
+						return pattern.test(text);
+					})
+					.slice(0, limit);
+
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								{
+									source: "SECTORON",
+									ticker: keyword,
+									count: matches.length,
+									search_scope: "Recent RSS articles only",
+									articles: matches,
+								},
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					isError: true,
+					content: [
+						{
+							type: "text" as const,
+							text:
+								error instanceof Error
+									? error.message
+									: "Failed to search SECTORON news.",
+						},
+					],
+				};
+			}
+		},
+	);
 	// RSS 연결 테스트
 	server.registerTool(
 		"test_rss_connection",
