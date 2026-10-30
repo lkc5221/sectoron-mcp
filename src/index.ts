@@ -518,8 +518,17 @@ function createServer() {
 
 const handler = createMcpHandler(createServer);
 
+const OPENAI_CHALLENGE_PATH = "/.well-known/openai-apps-challenge";
+const OPENAI_CHALLENGE_TOKEN = "pMnYvp_-nYUdBuxg1odhdLQByA62KQO9FolGnvBOypM";
+
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		if (new URL(request.url).pathname === OPENAI_CHALLENGE_PATH) {
+			return new Response(OPENAI_CHALLENGE_TOKEN, {
+				status: 200,
+				headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+			});
+		}
 		return handler(request, env, ctx);
 	},
 } satisfies ExportedHandler<Env>;
