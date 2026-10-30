@@ -102,7 +102,56 @@ function createServer() {
 			}
 		},
 	);
+	server.registerTool(
+		"test_rss_connection",
+		{
+			description: "Test SECTORON RSS feed accessibility.",
+			inputSchema: z.object({}),
+		},
+		async () => {
+			try {
+				const response = await fetch("https://sectoron.net/feed/", {
+					headers: {
+						Accept: "application/rss+xml, application/xml, text/xml",
+					},
+				});
 
+				const body = await response.text();
+
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								{
+									status: response.status,
+									ok: response.ok,
+									contentType: response.headers.get("content-type"),
+									isRSS: /<rss\b/i.test(body),
+									preview: body.slice(0, 200),
+								},
+								null,
+								2,
+							),
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					isError: true,
+					content: [
+						{
+							type: "text" as const,
+							text:
+								error instanceof Error
+									? error.message
+									: "RSS connection failed",
+						},
+					],
+				};
+			}
+		},
+	);
 	return server;
 }
 
