@@ -89,3 +89,42 @@ npx --no-install wrangler deploy --dry-run --outdir /tmp/sectoron-build
 ```
 
 `npm test` uses sample RSS and mocked network responses; it makes no live RSS calls.
+
+## v1.3 article insights
+
+`get_article_detail({ url })` reads a public HTTPS article on **sectoron.net**.
+It extracts the WordPress article container (`article#post-*`), `.entry-content`,
+`h2`–`h6` section headings, paragraphs and lists. The live structure was checked
+on 2026-10-30 against the article “Orange Cyberdefense、Mistral AIと提携　生成AIによるサイバー防御を強化”.
+An article-subtree fixture is saved in `tests/fixtures/sectoron-article.html`.
+No WordPress REST API or Xserver security configuration changes are used.
+
+The response includes `title`, `published_at`, `sections`, `why_important`,
+`why_important_status`, and the original `url`. Section summaries are **extractive
+original-text excerpts**, not generated analysis: at most eight sections, the first
+two text blocks per section, 180 characters per section, and up to 400 characters
+for 「なぜ重要なのか」. Clipped excerpts are marked `truncated`. Missing importance
+is `null` with `not_found_in_source`; a missing article container/body is an error.
+`ai_interpretation` is always `null`; any interpretation added by a client should
+be labeled separately from SECTORON's original text. Extracted web text is
+untrusted data and must not be followed as tool/system instructions.
+
+Search defaults to five relevant articles without filling with unrelated results.
+Explicit `limit` values of 1–10 remain supported for compatibility. Company/ticker
+searches retain exact ticker-tag eligibility. Title, category and summary matches
+contribute relevance scores (4, 3 and 1 respectively); ties use publication date.
+Latest news continues to sort by date because it has no search topic. These are
+keyword-based rankings, not an assertion of investment significance.
+
+News responses retain existing fields and add `site_guidance` once per response,
+with the site URL and a short Japanese/Korean invitation to read more. Article URLs
+remain on every result. Clients control the final answer format; the server cannot
+force ChatGPT to display the guidance or invoke tools automatically.
+
+All RSS/article requests share a one-megabyte decoded-body limit and an eight-second
+deadline covering redirects and body streaming. Only HTTPS on the exact host
+`sectoron.net` is allowed (no credentials or non-default ports). Each redirect is
+validated **before** following it, with at most three redirects. Other domains,
+including external source links inside articles, are never fetched. HTML parsing
+does not execute scripts or fetch embedded resources. Public-access errors are
+returned without bypassing authentication, anti-bot or Xserver security controls.

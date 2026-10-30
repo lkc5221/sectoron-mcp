@@ -117,3 +117,25 @@ export function matchesSector(
 		return fields.some((field) => pattern.test(field));
 	});
 }
+
+export function sectorRelevance(
+	article: { title: string; summary: string; tags: string[] },
+	keywords: string[],
+): number {
+	return (
+		(matchesSector({ title: article.title, summary: "", tags: [] }, keywords) ? 4 : 0) +
+		(matchesSector({ title: "", summary: "", tags: article.tags }, keywords) ? 3 : 0) +
+		(matchesSector({ title: "", summary: article.summary, tags: [] }, keywords) ? 1 : 0)
+	);
+}
+
+// Exact ticker-tag eligibility is kept; direct title mentions rank above secondary mentions.
+export function tickerRelevance(
+	article: { title: string; summary: string; tags: string[] },
+	tickers: string[],
+): number {
+	const aliases = COMPANIES.filter((company) =>
+		company.tickers.some((ticker) => tickers.includes(ticker)),
+	).flatMap((company) => company.aliases);
+	return sectorRelevance(article, [...tickers, ...aliases]);
+}
