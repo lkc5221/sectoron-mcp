@@ -11,6 +11,7 @@ type NewsArticle = {
 	summary: string;
 	published_at: string;
 	url: string;
+	tags: string[];
 };
 
 function decodeEntities(text: string): string {
@@ -103,6 +104,10 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 
 		const url = cleanText(extractTag(item, "link"));
 		const guid = cleanText(extractTag(item, "guid"));
+		const tags = Array.from(
+			item.matchAll(/<category(?:\s[^>]*)?>([\s\S]*?)<\/category>/gi),
+			(match) => cleanText(match[1]),
+		);
 
 		const pubDate = cleanText(extractTag(item, "pubDate"));
 
@@ -116,6 +121,7 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 				? pubDate
 				: date.toISOString(),
 			url,
+			tags,
 		};
 	});
 
@@ -190,7 +196,7 @@ function createServer() {
 		"search_news_by_ticker",
 		{
 			description:
-				"Search recent SECTORON news by US stock ticker symbol. Searches the latest articles available in the RSS feed.",
+				"Search recent SECTORON news by US stock ticker symbol. Matches RSS category tags exactly (case-insensitive) in the latest available articles.",
 			inputSchema: z.object({
 				ticker: z
 					.string()
@@ -210,21 +216,9 @@ function createServer() {
 				const keyword = ticker.trim().toUpperCase();
 
 				const matches = articles
-					.filter((article) => {
-						const text = `${article.title} ${article.summary} ${article.url}`.toUpperCase();
-
-						const escaped = keyword.replace(
-							/[.*+?^${}()|[\]\\]/g,
-							"\\$&",
-						);
-
-						const pattern = new RegExp(
-							`(^|[^A-Z0-9])${escaped}($|[^A-Z0-9])`,
-							"i",
-						);
-
-						return pattern.test(text);
-					})
+					.filter((article) =>
+						article.tags.some((tag) => tag.trim().toUpperCase() === keyword),
+					)
 					.slice(0, limit);
 
 				return {
