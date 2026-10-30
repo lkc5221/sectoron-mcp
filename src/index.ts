@@ -2,33 +2,137 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
-const WORDPRESS_API = "https://sectoron.net/wp-json/wp/v2";
+const WEBSITE = "https://sectoron.net";
+const RSS_URL = `${WEBSITE}/feed/`;
 
-type WordPressPost = {
+type NewsArticle = {
 	id: number;
-	date: string;
-	link: string;
-	title: { rendered: string };
-	excerpt: { rendered: string };
+	title: string;
+	summary: string;
+	published_at: string;
+	url: string;
 };
 
-function cleanText(html: string): string {
-	return html
-		.replace(/<[^>]*>/g, " ")
-		.replace(/&nbsp;/g, " ")
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
+function decodeEntities(text: string): string {
+	return text
+		.replace(/&#x([0-9a-f]+);/gi, (_, hex) =>
+			String.fromCodePoint(parseInt(hex, 16)),
+		)
+		.replace(/&#([0-9]+);/g, (_, num) =>
+			String.fromCodePoint(parseInt(num, 10)),
+		)
+		.replace(/&nbsp;/gi, " ")
+		.replace(/&amp;/gi, "&")
+		.replace(/&lt;/gi, "<")
+		.replace(/&gt;/gi, ">")
+		.replace(/&quot;/gi, '"')
+		.replace(/&apos;/gi, "'")
+		.replace(/&#039;/gi, "'");
+}
+
+function cleanText(text: string): string {
+	return decodeEntities(
+		text
+			.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+			.replace(/<[^>]*>/g, " ")
+	)
 		.replace(/\s+/g, " ")
 		.trim();
+}
+
+function extractTag(xml: string, tag: string): string {
+	const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+	const regex = new RegExp(
+		`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapedTag}>`,
+		"i",
+	);
+
+	const match = xml.match(regex);
+
+	return match ? match[1].trim() : "";
+}
+
+function extractPostId(url: string, guid: string): number {
+	const guidMatch = guid.match(/[?&]p=(\d+)/);
+
+	if (guidMatch) {
+		return Number(guidMatch[1]);
+	}
+
+	const urlMatch = url.match(/[?&]p=(\d+)/);
+
+	if (urlMatch) {
+		return Number(urlMatch[1]);
+	}
+
+	return 0;
+}
+
+async function fetchRSS(): Promise<string> {
+	const response = await fetch(RSS_URL, {
+		headers: {
+			Accept: "application/rss+xml, application/xml, text/xml",
+		},
+	});
+
+	if (!response.ok) {
+		throw new Error(`RSS HTTP error: ${response.status}`);
+	}
+
+	const xml = await response.text();
+
+	if (!/<rss\b/i.test(xml)) {
+		throw new Error("Invalid RSS response");
+	}
+
+	return xml;
+}
+
+function parseRSS(xml: string, limit: number): NewsArticle[] {
+	const items = xml.match(/<item(?:\s[^>]*)?>[\s\S]*?<\/item>/gi) ?? [];
+
+	const articles = items.map((item) => {
+		const title = cleanText(extractTag(item, "title"));
+		const summary = cleanText(extractTag(item, "description"));
+
+		const url = cleanText(extractTag(item, "link"));
+		const guid = cleanText(extractTag(item, "guid"));
+
+		const pubDate = cleanText(extractTag(item, "pubDate"));
+
+		const date = new Date(pubDate);
+
+		return {
+			id: extractPostId(url, guid),
+			title,
+			summary,
+			published_at: Number.isNaN(date.getTime())
+				? pubDate
+				: date.toISOString(),
+			url,
+		};
+	});
+
+	return articles
+		.filter((article) => article.title && article.url)
+		.sort((a, b) => {
+			const dateA = Date.parse(a.published_at);
+			const dateB = Date.parse(b.published_at);
+
+			return (Number.isNaN(dateB) ? 0 : dateB) -
+				(Number.isNaN(dateA) ? 0 : dateA);
+		})
+		.slice(0, limit);
 }
 
 function createServer() {
 	const server = new McpServer({
 		name: "SECTORON News",
-		version: "1.0.0",
+		version: "1.1.0",
 	});
 
+	// 최신 뉴스 조회
 	server.registerTool(
 		"get_latest_news",
 		{
@@ -40,34 +144,8 @@ function createServer() {
 		},
 		async ({ limit }) => {
 			try {
-				const url = `${WORDPRESS_API}/posts?per_page=${limit}&orderby=date&order=desc&_fields=id,date,link,title,excerpt`;
-
-				const response = await fetch(url, {
-					headers: {
-						Accept: "application/json",
-					},
-				});
-
-				if (!response.ok) {
-  const errorBody = await response.text();
-
-  console.error("WordPress API request failed", {
-    status: response.status,
-    body: errorBody.slice(0, 1000),
-  });
-
-  throw new Error(`WordPress API error: ${response.status}`);
-}
-
-				const posts = (await response.json()) as WordPressPost[];
-
-				const news = posts.map((post) => ({
-					id: post.id,
-					title: cleanText(post.title.rendered),
-					summary: cleanText(post.excerpt.rendered),
-					published_at: post.date,
-					url: post.link,
-				}));
+				const xml = await fetchRSS();
+				const articles = parseRSS(xml, limit);
 
 				return {
 					content: [
@@ -76,9 +154,9 @@ function createServer() {
 							text: JSON.stringify(
 								{
 									source: "SECTORON",
-									website: "https://sectoron.net",
-									count: news.length,
-									articles: news,
+									website: WEBSITE,
+									count: articles.length,
+									articles,
 								},
 								null,
 								2,
@@ -102,6 +180,8 @@ function createServer() {
 			}
 		},
 	);
+
+	// RSS 연결 테스트
 	server.registerTool(
 		"test_rss_connection",
 		{
@@ -110,7 +190,7 @@ function createServer() {
 		},
 		async () => {
 			try {
-				const response = await fetch("https://sectoron.net/feed/", {
+				const response = await fetch(RSS_URL, {
 					headers: {
 						Accept: "application/rss+xml, application/xml, text/xml",
 					},
@@ -152,6 +232,7 @@ function createServer() {
 			}
 		},
 	);
+
 	return server;
 }
 
