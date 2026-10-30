@@ -49,8 +49,15 @@ function createServer() {
 				});
 
 				if (!response.ok) {
-					throw new Error(`WordPress API error: ${response.status}`);
-				}
+  const errorBody = await response.text();
+
+  console.error("WordPress API request failed", {
+    status: response.status,
+    body: errorBody.slice(0, 1000),
+  });
+
+  throw new Error(`WordPress API error: ${response.status}`);
+}
 
 				const posts = (await response.json()) as WordPressPost[];
 
