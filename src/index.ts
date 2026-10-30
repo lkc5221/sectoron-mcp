@@ -94,7 +94,12 @@ function parseRSS(xml: string, limit: number): NewsArticle[] {
 
 	const articles = items.map((item) => {
 		const title = cleanText(extractTag(item, "title"));
-		const summary = cleanText(extractTag(item, "description"));
+		const summary = cleanText(
+    extractTag(item, "description")
+).replace(
+    /投稿\s+.*?\s+は\s+.*?\s+に最初に表示されました。/g,
+    ""
+).trim();
 
 		const url = cleanText(extractTag(item, "link"));
 		const guid = cleanText(extractTag(item, "guid"));
