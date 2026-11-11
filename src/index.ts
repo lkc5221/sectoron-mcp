@@ -407,6 +407,83 @@ function createServer() {
 		},
 	);
 
+
+	// Read-only daily digest preview. No subscriptions, storage, or outbound messages.
+	server.registerTool(
+		"preview_daily_topic_digest",
+		{
+			description:
+				"Preview SECTORON articles published in the last 24 hours about semiconductors and/or AI data centers. Read-only: does not subscribe, schedule, or send notifications. RSS feed coverage is limited.",
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				openWorldHint: true,
+			},
+			inputSchema: z.object({
+				topics: z
+					.array(z.enum(["semiconductors", "ai_datacenters"]))
+					.min(1)
+					.max(2)
+					.default(["semiconductors", "ai_datacenters"]),
+				hours: z.number().int().min(1).max(168).default(24),
+				limit: z.number().int().min(1).max(10).default(10),
+			}),
+		},
+		async ({ topics, hours, limit }) => {
+			try {
+				const now = Date.now();
+				const since = new Date(now - hours * 60 * 60 * 1000).toISOString();
+				const resolved = topics.map((topic) => {
+					const sector = SECTORS.find((entry) => entry.name === topic);
+					if (!sector) throw new Error(`Unsupported topic: ${topic}`);
+					return { topic, keywords: sector.keywords };
+				});
+				const articles = parseRSS(await fetchRSS(), Number.POSITIVE_INFINITY)
+					.filter((article) => {
+						const published = Date.parse(article.published_at);
+						return Number.isFinite(published) && published <= now && published >= Date.parse(since);
+					})
+					.map((article) => ({
+						...article,
+						matched_topics: resolved
+							.filter(({ keywords }) => matchesSector(article, keywords))
+							.map(({ topic }) => topic),
+					}))
+					.filter((article) => article.matched_topics.length > 0);
+				const unique = Array.from(
+					new Map(articles.map((article) => [article.url, article])).values(),
+				).slice(0, limit);
+				return {
+					content: [{
+						type: "text" as const,
+						text: JSON.stringify({
+							source: "SECTORON",
+							mode: "preview_only",
+							notification_sent: false,
+							subscription_created: false,
+							search_scope: SEARCH_SCOPE,
+							since,
+							until: new Date(now).toISOString(),
+							topics,
+							count: unique.length,
+							articles: unique,
+							site_guidance: SITE_GUIDANCE,
+							note: "RSS feed only; older or missing feed items are not included. Topic matching is keyword-based.",
+						}, null, 2),
+					}],
+				};
+			} catch (error) {
+				return {
+					isError: true,
+					content: [{
+						type: "text" as const,
+						text: error instanceof Error ? error.message : "Daily digest preview failed",
+					}],
+				};
+			}
+		},
+	);
+
 	server.registerTool(
 		"get_article_detail",
 		{
