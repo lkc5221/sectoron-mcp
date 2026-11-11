@@ -28,7 +28,7 @@ jobs:
       - run: npx --no-install wrangler deploy --dry-run --outdir /tmp/sectoron-build
       - name: Check deployed MCP tools (preview or production)
         env:
-          PREVIEW_URL: ${{ github.ref == 'refs/heads/main' && 'https://sectoron-mcp.onlyjesus5221.workers.dev/mcp' || 'https://feature-daily-topic-digest-preview-sectoron-mcp.onlyjesus5221.workers.dev/mcp' }}
+          PREVIEW_URL: ${{ github.ref == 'refs/heads/main' && 'https://sectoron-mcp.onlyjesus5221.workers.dev/mcp' || github.head_ref == 'feature/personalized-morning-headlines' && 'https://feature-personalized-morning-headlines-sectoron-mcp.onlyjesus5221.workers.dev/mcp' || 'https://feature-daily-topic-digest-preview-sectoron-mcp.onlyjesus5221.workers.dev/mcp' }}
         run: |
           node --input-type=module <<'NODE'
           const endpoint = process.env.PREVIEW_URL;
