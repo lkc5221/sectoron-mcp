@@ -7,6 +7,10 @@ on:
       - "tests/**"
       - "package.json"
       - ".github/workflows/validate-preview.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/validate-preview.yml"
   workflow_dispatch:
 
 jobs:
@@ -22,9 +26,9 @@ jobs:
       - run: npm test
       - run: npm run type-check
       - run: npx --no-install wrangler deploy --dry-run --outdir /tmp/sectoron-build
-      - name: Check deployed MCP preview tools
+      - name: Check deployed MCP tools (preview or production)
         env:
-          PREVIEW_URL: https://feature-daily-topic-digest-preview-sectoron-mcp.onlyjesus5221.workers.dev/mcp
+          PREVIEW_URL: ${{ github.ref == 'refs/heads/main' && 'https://sectoron-mcp.onlyjesus5221.workers.dev/mcp' || 'https://feature-daily-topic-digest-preview-sectoron-mcp.onlyjesus5221.workers.dev/mcp' }}
         run: |
           node --input-type=module <<'NODE'
           const endpoint = process.env.PREVIEW_URL;
