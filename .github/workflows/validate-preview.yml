@@ -1,0 +1,71 @@
+name: Validate SECTORON MCP preview
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "package.json"
+      - ".github/workflows/validate-preview.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-package-lock
+      - run: npm test
+      - run: npm run type-check
+      - run: npx --no-install wrangler deploy --dry-run --outdir /tmp/sectoron-build
+      - name: Check deployed MCP preview tools
+        env:
+          PREVIEW_URL: https://feature-daily-topic-digest-preview-sectoron-mcp.onlyjesus5221.workers.dev/mcp
+        run: |
+          node --input-type=module <<'NODE'
+          const endpoint = process.env.PREVIEW_URL;
+          async function rpc(method, params, id) {
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                accept: "application/json, text/event-stream",
+              },
+              body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (!response.ok) throw new Error(`${method}: HTTP ${response.status}`);
+            const body = await response.text();
+            const event = body.split("\n").find(line => line.startsWith("data:"));
+            const payload = JSON.parse(event ? event.slice(5).trim() : body);
+            if (payload.error) throw new Error(JSON.stringify(payload.error));
+            return payload.result;
+          }
+          const init = await rpc("initialize", {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "sectoron-preview-ci", version: "1.0" },
+          }, 1);
+          if (!init?.serverInfo) throw new Error("Missing server info");
+          const tools = await rpc("tools/list", {}, 2);
+          const names = (tools?.tools || []).map(tool => tool.name);
+          for (const name of ["get_latest_news", "preview_daily_topic_digest"]) {
+            if (!names.includes(name)) throw new Error(`Missing tool: ${name}`);
+          }
+          const digest = await rpc("tools/call", {
+            name: "preview_daily_topic_digest",
+            arguments: { topics: ["semiconductors", "ai_datacenters"], hours: 24, limit: 10 },
+          }, 3);
+          if (digest?.isError) throw new Error(JSON.stringify(digest));
+          const data = JSON.parse(digest.content.find(item => item.type === "text").text);
+          if (data.notification_sent !== false || data.subscription_created !== false)
+            throw new Error("Preview unexpectedly performed a notification action");
+          if (!Array.isArray(data.articles)) throw new Error("Invalid digest articles");
+          if (new Set(data.articles.map(article => article.url)).size !== data.articles.length)
+            throw new Error("Duplicate article URLs");
+          console.log(`MCP preview passed: ${data.count} articles, tools: ${names.join(", ")}`);
+          NODE
