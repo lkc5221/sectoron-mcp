@@ -413,7 +413,7 @@ function createServer() {
 		"preview_daily_topic_digest",
 		{
 			description:
-				"Preview SECTORON articles published in the last 24 hours about semiconductors and/or AI data centers. Read-only: does not subscribe, schedule, or send notifications. RSS feed coverage is limited.",
+				"Preview SECTORON articles published in the last 24 hours for selected sectors (semiconductors, AI data centers, cybersecurity), prioritized by relevance. Read-only: does not subscribe, schedule, or send notifications. RSS feed coverage is limited.",
 			annotations: {
 				readOnlyHint: true,
 				destructiveHint: false,
@@ -421,15 +421,16 @@ function createServer() {
 			},
 			inputSchema: z.object({
 				topics: z
-					.array(z.enum(["semiconductors", "ai_datacenters"]))
+					.array(z.enum(["semiconductors", "ai_datacenters", "cybersecurity"]))
 					.min(1)
-					.max(2)
+					.max(3)
 					.default(["semiconductors", "ai_datacenters"]),
 				hours: z.number().int().min(1).max(168).default(24),
 				limit: z.number().int().min(1).max(10).default(10),
+				exclude_urls: z.array(z.string().url()).max(100).default([]),
 			}),
 		},
-		async ({ topics, hours, limit }) => {
+		async ({ topics, hours, limit, exclude_urls }) => {
 			try {
 				const now = Date.now();
 				const since = new Date(now - hours * 60 * 60 * 1000).toISOString();
@@ -450,9 +451,18 @@ function createServer() {
 							.map(({ topic }) => topic),
 					}))
 					.filter((article) => article.matched_topics.length > 0);
+				const excluded = new Set(exclude_urls);
 				const unique = Array.from(
 					new Map(articles.map((article) => [article.url, article])).values(),
-				).slice(0, limit);
+				)
+					.filter((article) => !excluded.has(article.url))
+					.sort((a, b) => {
+						const score = (article: typeof a) => resolved.reduce(
+							(sum, { keywords }) => sum + sectorRelevance(article, keywords), 0,
+							);
+						return score(b) - score(a) || Date.parse(b.published_at) - Date.parse(a.published_at);
+					})
+					.slice(0, limit);
 				return {
 					content: [{
 						type: "text" as const,
@@ -465,6 +475,7 @@ function createServer() {
 							since,
 							until: new Date(now).toISOString(),
 							topics,
+							excluded_url_count: excluded.size,
 							count: unique.length,
 							articles: unique,
 							site_guidance: SITE_GUIDANCE,
